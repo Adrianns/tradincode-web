@@ -151,15 +151,39 @@ export async function resetPaperTrading() {
 /**
  * Start paper trading
  */
-export async function startPaperTrading() {
+export async function startPaperTrading(initialBalance = null) {
   const client = await getPool().connect();
   try {
-    const result = await client.query(`
-      UPDATE paper_config
-      SET is_active = true, started_at = NOW(), updated_at = NOW()
-      WHERE id = (SELECT id FROM paper_config ORDER BY id DESC LIMIT 1)
-      RETURNING *
-    `);
+    let query;
+    let params;
+
+    if (initialBalance !== null && initialBalance !== undefined) {
+      // Starting with custom initial balance
+      query = `
+        UPDATE paper_config
+        SET
+          is_active = true,
+          started_at = NOW(),
+          initial_balance = $1,
+          balance_usd = $1,
+          balance_btc = 0.00,
+          updated_at = NOW()
+        WHERE id = (SELECT id FROM paper_config ORDER BY id DESC LIMIT 1)
+        RETURNING *
+      `;
+      params = [initialBalance];
+    } else {
+      // Starting without changing balance (resume)
+      query = `
+        UPDATE paper_config
+        SET is_active = true, started_at = NOW(), updated_at = NOW()
+        WHERE id = (SELECT id FROM paper_config ORDER BY id DESC LIMIT 1)
+        RETURNING *
+      `;
+      params = [];
+    }
+
+    const result = await client.query(query, params);
     return result.rows[0];
   } finally {
     client.release();

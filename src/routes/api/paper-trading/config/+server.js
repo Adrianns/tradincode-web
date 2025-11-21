@@ -21,12 +21,12 @@ export async function GET() {
 export async function POST({ request }) {
   try {
     const body = await request.json();
-    const { action, ...updates } = body;
+    const { action, initial_balance, ...updates } = body;
 
     let result;
 
     if (action === 'start') {
-      result = await startPaperTrading();
+      result = await startPaperTrading(initial_balance);
     } else if (action === 'stop') {
       result = await stopPaperTrading();
     } else {

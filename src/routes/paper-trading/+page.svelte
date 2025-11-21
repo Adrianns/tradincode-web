@@ -27,10 +27,29 @@
   async function toggleActive() {
     try {
       const action = config.isActive ? 'stop' : 'start';
+      let initialBalance = null;
+
+      // If activating for the first time, ask for initial balance
+      if (action === 'start' && !config.startedAt) {
+        const input = prompt('Ingresa el balance inicial en USD:', '10000');
+        if (!input) return; // User cancelled
+
+        initialBalance = parseFloat(input);
+        if (isNaN(initialBalance) || initialBalance <= 0) {
+          alert('❌ Balance inválido. Debe ser un número mayor a 0.');
+          return;
+        }
+      }
+
+      const body = { action };
+      if (initialBalance !== null) {
+        body.initial_balance = initialBalance;
+      }
+
       const response = await fetch('/api/paper-trading/config', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action })
+        body: JSON.stringify(body)
       });
 
       if (response.ok) {
@@ -38,7 +57,9 @@
         config = {
           ...config,
           isActive: updated.is_active,
-          startedAt: updated.started_at
+          startedAt: updated.started_at,
+          initialBalance: updated.initial_balance ? parseFloat(updated.initial_balance) : config.initialBalance,
+          balanceUsd: updated.balance_usd ? parseFloat(updated.balance_usd) : config.balanceUsd
         };
         alert(config.isActive ? '✅ Paper Trading activado' : '⏸️ Paper Trading pausado');
       }
