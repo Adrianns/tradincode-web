@@ -155,8 +155,58 @@
 <div class="paper-trading">
   <header>
     <h1>📊 Paper Trading</h1>
-    <p class="subtitle">Simulación automática de trading basado en señales</p>
+    <p class="subtitle">Simulación automática de trading con estrategia Trend Shield</p>
   </header>
+
+  <!-- Strategy Explanation -->
+  <section class="strategy-section">
+    <div class="strategy-card">
+      <h2>🛡️ Estrategia: Trend Shield (Tendencia Blindada)</h2>
+      <p class="strategy-description">
+        Estrategia conservadora para spot trading que combina filtro de tendencia con señales de momentum y gestión de riesgo basada en volatilidad.
+      </p>
+
+      <div class="strategy-grid">
+        <div class="strategy-block entry">
+          <h3>📈 Condiciones de Entrada</h3>
+          <ul>
+            <li><strong>EMA 200:</strong> Precio debe estar ENCIMA de la EMA de 200 días (mercado alcista)</li>
+            <li><strong>SuperTrend:</strong> Debe cambiar de ROJO a VERDE (señal de compra)</li>
+          </ul>
+          <p class="strategy-note">Ambas condiciones deben cumplirse simultáneamente</p>
+        </div>
+
+        <div class="strategy-block exit">
+          <h3>📉 Condiciones de Salida</h3>
+          <p>Se vende cuando ocurre <strong>cualquiera</strong> de estas condiciones:</p>
+          <ul>
+            <li><strong>SuperTrend ROJO:</strong> Señal técnica de cambio de tendencia</li>
+            <li><strong>Stop Loss ATR:</strong> Precio ≤ Entrada - (ATR14 × 1.5)</li>
+            <li><strong>Take Profit ATR:</strong> Precio ≥ Entrada + (ATR14 × 2.25)</li>
+          </ul>
+        </div>
+
+        <div class="strategy-block risk">
+          <h3>⚖️ Gestión de Riesgo (ATR)</h3>
+          <ul>
+            <li><strong>ATR(14):</strong> Mide la volatilidad promedio de 14 días</li>
+            <li><strong>Stop Loss:</strong> 1.5× ATR debajo del precio de entrada</li>
+            <li><strong>Take Profit:</strong> 2.25× ATR arriba (ratio 1:1.5)</li>
+          </ul>
+          <p class="strategy-note">El SL y TP se calculan dinámicamente al momento de compra</p>
+        </div>
+
+        <div class="strategy-block timeframe">
+          <h3>⏰ Temporalidad</h3>
+          <ul>
+            <li><strong>Timeframe:</strong> Diario (1D)</li>
+            <li><strong>Análisis:</strong> Cada 4 horas</li>
+            <li><strong>Tipo:</strong> Spot (sin apalancamiento)</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </section>
 
   {#if data.error}
     <div class="error-banner">⚠️ {data.error}</div>
@@ -201,28 +251,7 @@
               <div class="form-group">
                 <label>% por operación</label>
                 <input type="number" bind:value={formData.percentagePerTrade} min="1" max="100" required />
-              </div>
-              <div class="form-group">
-                <label>Umbral de compra</label>
-                <input type="number" bind:value={formData.buyThreshold} min="0" max="100" required />
-              </div>
-            </div>
-
-            <div class="form-row">
-              <div class="form-group">
-                <label>Umbral de venta</label>
-                <input type="number" bind:value={formData.sellThreshold} min="0" max="100" required />
-              </div>
-              <div class="form-group">
-                <label>Take Profit %</label>
-                <input type="number" bind:value={formData.takeProfitPercentage} min="1" max="100" required />
-              </div>
-            </div>
-
-            <div class="form-row">
-              <div class="form-group">
-                <label>Stop Loss %</label>
-                <input type="number" bind:value={formData.stopLossPercentage} min="1" max="100" required />
+                <span class="form-hint">Porcentaje del balance USD a invertir en cada compra</span>
               </div>
             </div>
 
@@ -233,24 +262,34 @@
               </button>
             </div>
           </form>
+
+          <div class="config-note">
+            <strong>Nota:</strong> Los umbrales de compra/venta ya no se usan. La estrategia Trend Shield usa EMA 200 + SuperTrend para las señales. El Stop Loss y Take Profit se calculan automáticamente con ATR.
+          </div>
         {:else}
           <div class="config-display">
             <div class="config-item">
               <span class="label">Balance inicial:</span>
               <span class="value">{formatCurrency(config.initialBalance)}</span>
             </div>
-            <div class="config-item">
+            <div class="config-item has-tooltip">
               <span class="label">% por operación:</span>
               <span class="value">{config.percentagePerTrade}%</span>
+              <span class="tooltip">Invierte {config.percentagePerTrade}% del balance USD disponible en cada señal de compra</span>
             </div>
-            <div class="config-item">
-              <span class="label">Umbral compra/venta:</span>
-              <span class="value">{config.buyThreshold} / {config.sellThreshold}</span>
+            <div class="config-item has-tooltip">
+              <span class="label">Stop Loss / Take Profit:</span>
+              <span class="value atr-badge">Dinámico (ATR)</span>
+              <span class="tooltip">Se calcula al momento de compra: SL = -1.5×ATR | TP = +2.25×ATR</span>
             </div>
-            <div class="config-item">
-              <span class="label">Take Profit / Stop Loss:</span>
-              <span class="value">{config.takeProfitPercentage}% / {config.stopLossPercentage}%</span>
-            </div>
+          </div>
+
+          <div class="config-defaults">
+            <h4>Valores por defecto recomendados:</h4>
+            <ul>
+              <li><strong>20% por operación:</strong> Permite ~5 entradas escalonadas si hay múltiples señales</li>
+              <li><strong>100% por operación:</strong> All-in en cada señal (más agresivo, menos diversificado)</li>
+            </ul>
           </div>
         {/if}
 
@@ -427,6 +466,89 @@
     margin: 0;
   }
 
+  /* Strategy Section */
+  .strategy-section {
+    margin-bottom: 24px;
+  }
+
+  .strategy-card {
+    background: linear-gradient(135deg, #1e3a5f 0%, #2d5a87 100%);
+    border-radius: 12px;
+    padding: 24px;
+    color: white;
+  }
+
+  .strategy-card h2 {
+    color: white;
+    margin: 0 0 12px 0;
+    font-size: 22px;
+  }
+
+  .strategy-description {
+    opacity: 0.9;
+    margin: 0 0 20px 0;
+    font-size: 15px;
+    line-height: 1.5;
+  }
+
+  .strategy-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 16px;
+  }
+
+  .strategy-block {
+    background: rgba(255, 255, 255, 0.1);
+    border-radius: 8px;
+    padding: 16px;
+  }
+
+  .strategy-block h3 {
+    font-size: 14px;
+    margin: 0 0 12px 0;
+    color: white;
+  }
+
+  .strategy-block ul {
+    margin: 0;
+    padding-left: 20px;
+    font-size: 13px;
+    line-height: 1.8;
+  }
+
+  .strategy-block li {
+    opacity: 0.95;
+  }
+
+  .strategy-block p {
+    font-size: 13px;
+    margin: 8px 0 0 0;
+    opacity: 0.9;
+  }
+
+  .strategy-note {
+    font-size: 12px;
+    opacity: 0.7;
+    font-style: italic;
+    margin-top: 8px;
+  }
+
+  .strategy-block.entry {
+    border-left: 3px solid #22c55e;
+  }
+
+  .strategy-block.exit {
+    border-left: 3px solid #ef4444;
+  }
+
+  .strategy-block.risk {
+    border-left: 3px solid #f59e0b;
+  }
+
+  .strategy-block.timeframe {
+    border-left: 3px solid #3b82f6;
+  }
+
   .error-banner {
     background: #fee2e2;
     color: #991b1b;
@@ -595,6 +717,77 @@
   .cancel-btn {
     background: #f3f4f6;
     color: #6b7280;
+  }
+
+  .form-hint {
+    font-size: 11px;
+    color: #9ca3af;
+    margin-top: 4px;
+  }
+
+  .config-note {
+    background: #fef3c7;
+    color: #92400e;
+    padding: 12px;
+    border-radius: 6px;
+    font-size: 13px;
+    margin-top: 16px;
+  }
+
+  .config-defaults {
+    background: #f0f9ff;
+    border: 1px solid #bae6fd;
+    border-radius: 6px;
+    padding: 12px 16px;
+    margin-top: 16px;
+  }
+
+  .config-defaults h4 {
+    font-size: 13px;
+    margin: 0 0 8px 0;
+    color: #0369a1;
+  }
+
+  .config-defaults ul {
+    margin: 0;
+    padding-left: 20px;
+    font-size: 12px;
+    color: #0c4a6e;
+  }
+
+  .config-defaults li {
+    margin-bottom: 4px;
+  }
+
+  .config-item.has-tooltip {
+    position: relative;
+  }
+
+  .config-item .tooltip {
+    display: none;
+    position: absolute;
+    bottom: 100%;
+    left: 0;
+    background: #1f2937;
+    color: white;
+    padding: 8px 12px;
+    border-radius: 6px;
+    font-size: 12px;
+    white-space: nowrap;
+    z-index: 10;
+    margin-bottom: 4px;
+  }
+
+  .config-item.has-tooltip:hover .tooltip {
+    display: block;
+  }
+
+  .atr-badge {
+    background: #dbeafe;
+    color: #1d4ed8;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 12px;
   }
 
   /* Balance Section */
@@ -796,6 +989,25 @@
 
     .metrics-section {
       grid-template-columns: repeat(2, 1fr);
+    }
+
+    .strategy-grid {
+      grid-template-columns: 1fr;
+    }
+  }
+
+  @media (max-width: 640px) {
+    .strategy-card {
+      padding: 16px;
+    }
+
+    .strategy-card h2 {
+      font-size: 18px;
+    }
+
+    .config-item .tooltip {
+      white-space: normal;
+      width: 200px;
     }
   }
 </style>
