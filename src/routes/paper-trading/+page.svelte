@@ -1,123 +1,15 @@
 <script>
+  import { goto } from '$app/navigation';
+  import { api } from '$lib/api/client.js';
+
   export let data;
 
-  let config = data.config;
-  let editing = false;
-  let formData = config ? { ...config } : {};
+  let accounts = data.accounts || [];
+  let rankings = data.rankings || [];
+  let strategies = data.strategies || [];
 
-  // Calculate current portfolio value
-  $: totalValue = config ? config.balanceUsd + (config.balanceBtc * data.currentPrice) : 0;
-  $: profitLoss = config ? totalValue - config.initialBalance : 0;
-  $: profitLossPercentage = config ? ((profitLoss / config.initialBalance) * 100) : 0;
-
-  // Calculate win rate
-  $: winRate = data.metrics.totalSells > 0
-    ? (data.metrics.winningTrades / data.metrics.totalSells) * 100
-    : 0;
-
-  // Calculate HODL comparison
-  $: hodlBtc = config && data.portfolioHistory.length > 0
-    ? config.initialBalance / data.portfolioHistory[0].btcPrice
-    : 0;
-  $: hodlValue = hodlBtc * data.currentPrice;
-  $: hodlProfit = hodlValue - (config?.initialBalance || 0);
-  $: hodlProfitPercentage = config ? ((hodlProfit / config.initialBalance) * 100) : 0;
-  $: vsHodl = profitLossPercentage - hodlProfitPercentage;
-
-  async function toggleActive() {
-    try {
-      const action = config.isActive ? 'stop' : 'start';
-      let initialBalance = null;
-
-      // If activating for the first time, ask for initial balance
-      if (action === 'start' && !config.startedAt) {
-        const input = prompt('Ingresa el balance inicial en USD:', '10000');
-        if (!input) return; // User cancelled
-
-        initialBalance = parseFloat(input);
-        if (isNaN(initialBalance) || initialBalance <= 0) {
-          alert('❌ Balance inválido. Debe ser un número mayor a 0.');
-          return;
-        }
-      }
-
-      const body = { action };
-      if (initialBalance !== null) {
-        body.initial_balance = initialBalance;
-      }
-
-      const response = await fetch('/api/paper-trading/config', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body)
-      });
-
-      if (response.ok) {
-        const updated = await response.json();
-        config = {
-          ...config,
-          isActive: updated.is_active,
-          startedAt: updated.started_at,
-          initialBalance: updated.initial_balance ? parseFloat(updated.initial_balance) : config.initialBalance,
-          balanceUsd: updated.balance_usd ? parseFloat(updated.balance_usd) : config.balanceUsd
-        };
-        alert(config.isActive ? '✅ Paper Trading activado' : '⏸️ Paper Trading pausado');
-      }
-    } catch (error) {
-      alert('Error al cambiar estado: ' + error.message);
-    }
-  }
-
-  async function saveConfig() {
-    try {
-      const response = await fetch('/api/paper-trading/config', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          percentage_per_trade: formData.percentagePerTrade,
-          buy_threshold: formData.buyThreshold,
-          sell_threshold: formData.sellThreshold,
-          take_profit_percentage: formData.takeProfitPercentage,
-          stop_loss_percentage: formData.stopLossPercentage
-        })
-      });
-
-      if (response.ok) {
-        const updated = await response.json();
-        config = {
-          ...config,
-          percentagePerTrade: updated.percentage_per_trade,
-          buyThreshold: updated.buy_threshold,
-          sellThreshold: updated.sell_threshold,
-          takeProfitPercentage: updated.take_profit_percentage,
-          stopLossPercentage: updated.stop_loss_percentage
-        };
-        editing = false;
-        alert('✅ Configuración guardada');
-      }
-    } catch (error) {
-      alert('Error al guardar: ' + error.message);
-    }
-  }
-
-  async function resetPaperTrading() {
-    if (!confirm('¿Estás seguro? Esto borrará todo el historial de paper trading.')) {
-      return;
-    }
-
-    try {
-      const response = await fetch('/api/paper-trading/reset', {
-        method: 'POST'
-      });
-
-      if (response.ok) {
-        alert('✅ Paper Trading reiniciado');
-        location.reload();
-      }
-    } catch (error) {
-      alert('Error al reiniciar: ' + error.message);
-    }
-  }
+  // Get current BTC price from any active account or default to 0
+  $: currentBtcPrice = accounts.length > 0 ? 95000 : 0; // TODO: fetch from API
 
   function formatCurrency(value) {
     return new Intl.NumberFormat('en-US', {
@@ -129,12 +21,18 @@
   }
 
   function formatDate(dateString) {
+    if (!dateString) return 'N/A';
     return new Date(dateString).toLocaleString('en-US', {
       month: 'short',
       day: 'numeric',
       hour: '2-digit',
       minute: '2-digit'
     });
+  }
+
+  function getStrategyLabel(strategyValue) {
+    const strategy = strategies.find(s => s.value === strategyValue);
+    return strategy ? strategy.label : strategyValue;
   }
 
   function getStatusColor(isActive) {
@@ -146,296 +44,216 @@
     if (value < 0) return '#ef4444';
     return '#6b7280';
   }
+
+  function calculateTotalValue(account) {
+    return parseFloat(account.balance_usd) + (parseFloat(account.balance_btc) * currentBtcPrice);
+  }
+
+  function calculateROI(account) {
+    const totalValue = calculateTotalValue(account);
+    const initialBalance = parseFloat(account.initial_balance);
+    return ((totalValue - initialBalance) / initialBalance) * 100;
+  }
+
+  function calculateWinRate(account) {
+    const totalTrades = parseInt(account.total_trades) || 0;
+    const winningTrades = parseInt(account.winning_trades) || 0;
+    return totalTrades > 0 ? (winningTrades / totalTrades) * 100 : 0;
+  }
+
+  async function toggleAccount(accountId) {
+    try {
+      await api.toggleAccount(accountId);
+      // Reload data
+      location.reload();
+    } catch (error) {
+      alert('Error toggling account: ' + error.message);
+    }
+  }
+
+  async function deleteAccount(accountId, accountName) {
+    if (!confirm(`Are you sure you want to delete "${accountName}"? This will delete all trades associated with this account.`)) {
+      return;
+    }
+
+    try {
+      await api.deleteAccount(accountId);
+      // Reload data
+      location.reload();
+    } catch (error) {
+      alert('Error deleting account: ' + error.message);
+    }
+  }
+
+  function goToAccountDetails(accountId) {
+    goto(`/paper-trading/accounts/${accountId}`);
+  }
+
+  function goToCreateAccount() {
+    goto('/paper-trading/accounts/create');
+  }
+
+  function goToRankings() {
+    goto('/paper-trading/rankings');
+  }
+
+  // Get top 3 accounts by ROI
+  $: top3Accounts = [...accounts]
+    .map(acc => ({
+      ...acc,
+      roi: calculateROI(acc)
+    }))
+    .sort((a, b) => b.roi - a.roi)
+    .slice(0, 3);
 </script>
 
 <svelte:head>
-  <title>Paper Trading - Tradincode</title>
+  <title>Paper Trading Accounts - Tradincode</title>
 </svelte:head>
 
 <div class="paper-trading">
   <header>
-    <h1>📊 Paper Trading</h1>
-    <p class="subtitle">Simulación automática de trading con estrategia Trend Shield</p>
-  </header>
-
-  <!-- Strategy Explanation -->
-  <section class="strategy-section">
-    <div class="strategy-card">
-      <h2>🛡️ Estrategia: Trend Shield (Tendencia Blindada)</h2>
-      <p class="strategy-description">
-        Estrategia conservadora para spot trading que combina filtro de tendencia con señales de momentum y gestión de riesgo basada en volatilidad.
-      </p>
-
-      <div class="strategy-grid">
-        <div class="strategy-block entry">
-          <h3>📈 Condiciones de Entrada</h3>
-          <ul>
-            <li><strong>EMA 200:</strong> Precio debe estar ENCIMA de la EMA de 200 días (mercado alcista)</li>
-            <li><strong>SuperTrend:</strong> Debe cambiar de ROJO a VERDE (señal de compra)</li>
-          </ul>
-          <p class="strategy-note">Ambas condiciones deben cumplirse simultáneamente</p>
-        </div>
-
-        <div class="strategy-block exit">
-          <h3>📉 Condiciones de Salida</h3>
-          <p>Se vende cuando ocurre <strong>cualquiera</strong> de estas condiciones:</p>
-          <ul>
-            <li><strong>SuperTrend ROJO:</strong> Señal técnica de cambio de tendencia</li>
-            <li><strong>Stop Loss ATR:</strong> Precio ≤ Entrada - (ATR14 × 1.5)</li>
-            <li><strong>Take Profit ATR:</strong> Precio ≥ Entrada + (ATR14 × 2.25)</li>
-          </ul>
-        </div>
-
-        <div class="strategy-block risk">
-          <h3>⚖️ Gestión de Riesgo (ATR)</h3>
-          <ul>
-            <li><strong>ATR(14):</strong> Mide la volatilidad promedio de 14 días</li>
-            <li><strong>Stop Loss:</strong> 1.5× ATR debajo del precio de entrada</li>
-            <li><strong>Take Profit:</strong> 2.25× ATR arriba (ratio 1:1.5)</li>
-          </ul>
-          <p class="strategy-note">El SL y TP se calculan dinámicamente al momento de compra</p>
-        </div>
-
-        <div class="strategy-block timeframe">
-          <h3>⏰ Temporalidad</h3>
-          <ul>
-            <li><strong>Timeframe:</strong> Diario (1D)</li>
-            <li><strong>Análisis:</strong> Cada 4 horas</li>
-            <li><strong>Tipo:</strong> Spot (sin apalancamiento)</li>
-          </ul>
-        </div>
+    <div class="header-content">
+      <div>
+        <h1>📊 Multi-Account Paper Trading</h1>
+        <p class="subtitle">Manage multiple trading strategies in parallel</p>
+      </div>
+      <div class="header-actions">
+        <button class="btn-primary" on:click={goToCreateAccount}>
+          + Create New Account
+        </button>
+        {#if rankings.length > 0}
+          <button class="btn-secondary" on:click={goToRankings}>
+            🏆 View Rankings
+          </button>
+        {/if}
       </div>
     </div>
-  </section>
+  </header>
 
   {#if data.error}
     <div class="error-banner">⚠️ {data.error}</div>
   {/if}
 
-  {#if config}
-    <!-- Control Panel -->
-    <section class="control-panel">
-      <div class="status-card">
-        <div class="status-header">
-          <h2>Estado</h2>
-          <button
-            class="toggle-btn"
-            class:active={config.isActive}
-            on:click={toggleActive}
-            style="background: {getStatusColor(config.isActive)}"
-          >
-            {config.isActive ? '✓ ACTIVO' : '⏸ PAUSADO'}
-          </button>
-        </div>
-
-        {#if config.isActive && config.startedAt}
-          <p class="started-date">
-            Activo desde {formatDate(config.startedAt)}
-          </p>
-        {/if}
+  <!-- Top 3 Accounts -->
+  {#if top3Accounts.length > 0}
+    <section class="top-accounts">
+      <h2>Top Performing Accounts</h2>
+      <div class="top-accounts-grid">
+        {#each top3Accounts as account, index}
+          <div class="top-account-card rank-{index + 1}" on:click={() => goToAccountDetails(account.id)}>
+            <div class="rank-badge">
+              {#if index === 0}🥇
+              {:else if index === 1}🥈
+              {:else}🥉
+              {/if}
+            </div>
+            <h3>{account.account_name}</h3>
+            <p class="strategy">{getStrategyLabel(account.strategy)}</p>
+            <div class="roi-value" style="color: {getProfitColor(account.roi)}">
+              {account.roi >= 0 ? '+' : ''}{account.roi.toFixed(2)}% ROI
+            </div>
+            <div class="account-stats">
+              <span>{calculateWinRate(account).toFixed(1)}% Win Rate</span>
+              <span>{account.total_trades || 0} Trades</span>
+            </div>
+          </div>
+        {/each}
       </div>
+    </section>
+  {/if}
 
-      <div class="config-card">
-        <div class="config-header">
-          <h2>Configuración</h2>
-          {#if !editing}
-            <button class="edit-btn" on:click={() => { editing = true; formData = {...config}; }}>
-              ✏️ Editar
-            </button>
-          {/if}
-        </div>
+  <!-- All Accounts Table -->
+  <section class="accounts-section">
+    <div class="section-header">
+      <h2>All Accounts ({accounts.length})</h2>
+    </div>
 
-        {#if editing}
-          <form on:submit|preventDefault={saveConfig} class="config-form">
-            <div class="form-row">
-              <div class="form-group">
-                <label>% por operación</label>
-                <input type="number" bind:value={formData.percentagePerTrade} min="1" max="100" required />
-                <span class="form-hint">Porcentaje del balance USD a invertir en cada compra</span>
-              </div>
-            </div>
-
-            <div class="form-actions">
-              <button type="submit" class="save-btn">💾 Guardar</button>
-              <button type="button" class="cancel-btn" on:click={() => editing = false}>
-                ✖ Cancelar
-              </button>
-            </div>
-          </form>
-
-          <div class="config-note">
-            <strong>Nota:</strong> Los umbrales de compra/venta ya no se usan. La estrategia Trend Shield usa EMA 200 + SuperTrend para las señales. El Stop Loss y Take Profit se calculan automáticamente con ATR.
-          </div>
-        {:else}
-          <div class="config-display">
-            <div class="config-item">
-              <span class="label">Balance inicial:</span>
-              <span class="value">{formatCurrency(config.initialBalance)}</span>
-            </div>
-            <div class="config-item has-tooltip">
-              <span class="label">% por operación:</span>
-              <span class="value">{config.percentagePerTrade}%</span>
-              <span class="tooltip">Invierte {config.percentagePerTrade}% del balance USD disponible en cada señal de compra</span>
-            </div>
-            <div class="config-item has-tooltip">
-              <span class="label">Stop Loss / Take Profit:</span>
-              <span class="value atr-badge">Dinámico (ATR)</span>
-              <span class="tooltip">Se calcula al momento de compra: SL = -1.5×ATR | TP = +2.25×ATR</span>
-            </div>
-          </div>
-
-          <div class="config-defaults">
-            <h4>Valores por defecto recomendados:</h4>
-            <ul>
-              <li><strong>20% por operación:</strong> Permite ~5 entradas escalonadas si hay múltiples señales</li>
-              <li><strong>100% por operación:</strong> All-in en cada señal (más agresivo, menos diversificado)</li>
-            </ul>
-          </div>
-        {/if}
-
-        <button class="reset-btn" on:click={resetPaperTrading}>
-          🔄 Reset Paper Trading
+    {#if accounts.length > 0}
+      <div class="accounts-table-container">
+        <table class="accounts-table">
+          <thead>
+            <tr>
+              <th>Account Name</th>
+              <th>Strategy</th>
+              <th>Status</th>
+              <th>Balance USD</th>
+              <th>Balance BTC</th>
+              <th>Total Value</th>
+              <th>ROI</th>
+              <th>Win Rate</th>
+              <th>Trades</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {#each accounts as account}
+              {@const totalValue = calculateTotalValue(account)}
+              {@const roi = calculateROI(account)}
+              {@const winRate = calculateWinRate(account)}
+              <tr class:inactive={!account.is_active}>
+                <td class="account-name" on:click={() => goToAccountDetails(account.id)}>
+                  <strong>{account.account_name}</strong>
+                </td>
+                <td>
+                  <span class="strategy-badge">{getStrategyLabel(account.strategy)}</span>
+                </td>
+                <td>
+                  <button
+                    class="status-toggle"
+                    class:active={account.is_active}
+                    style="background: {getStatusColor(account.is_active)}"
+                    on:click={() => toggleAccount(account.id)}
+                  >
+                    {account.is_active ? 'Active' : 'Inactive'}
+                  </button>
+                </td>
+                <td>{formatCurrency(parseFloat(account.balance_usd))}</td>
+                <td>{parseFloat(account.balance_btc).toFixed(8)} ₿</td>
+                <td><strong>{formatCurrency(totalValue)}</strong></td>
+                <td style="color: {getProfitColor(roi)}">
+                  <strong>{roi >= 0 ? '+' : ''}{roi.toFixed(2)}%</strong>
+                </td>
+                <td>{winRate.toFixed(1)}%</td>
+                <td>{account.total_trades || 0}</td>
+                <td>
+                  <div class="actions">
+                    <button class="btn-view" on:click={() => goToAccountDetails(account.id)}>
+                      View
+                    </button>
+                    <button class="btn-delete" on:click={() => deleteAccount(account.id, account.account_name)}>
+                      Delete
+                    </button>
+                  </div>
+                </td>
+              </tr>
+            {/each}
+          </tbody>
+        </table>
+      </div>
+    {:else}
+      <div class="no-accounts">
+        <h3>No Accounts Yet</h3>
+        <p>Create your first paper trading account to start testing strategies</p>
+        <button class="btn-primary" on:click={goToCreateAccount}>
+          + Create Account
         </button>
       </div>
-    </section>
+    {/if}
+  </section>
 
-    <!-- Balance Cards -->
-    <section class="balance-section">
-      <div class="balance-card">
-        <h3>Balance USD</h3>
-        <div class="balance-value">{formatCurrency(config.balanceUsd)}</div>
-      </div>
-
-      <div class="balance-card">
-        <h3>Balance BTC</h3>
-        <div class="balance-value">{config.balanceBtc.toFixed(8)} ₿</div>
-        <div class="balance-sub">{formatCurrency(config.balanceBtc * data.currentPrice)}</div>
-      </div>
-
-      <div class="balance-card total">
-        <h3>Valor Total</h3>
-        <div class="balance-value">{formatCurrency(totalValue)}</div>
-        <div
-          class="balance-sub"
-          style="color: {getProfitColor(profitLoss)}"
-        >
-          {profitLoss >= 0 ? '+' : ''}{formatCurrency(profitLoss)}
-          ({profitLoss >= 0 ? '+' : ''}{profitLossPercentage.toFixed(2)}%)
+  <!-- Strategy Info -->
+  <section class="info-section">
+    <h2>Available Strategies ({strategies.length})</h2>
+    <div class="strategies-grid">
+      {#each strategies as strategy}
+        <div class="strategy-info-card">
+          <h3>{strategy.label}</h3>
+          <p class="suggested-balance">Suggested: {formatCurrency(strategy.suggestedBalance)}</p>
         </div>
-      </div>
-    </section>
-
-    <!-- Metrics Cards -->
-    <section class="metrics-section">
-      <div class="metric-card">
-        <div class="metric-label">Total Operaciones</div>
-        <div class="metric-value">{data.metrics.totalBuys + data.metrics.totalSells}</div>
-      </div>
-
-      <div class="metric-card">
-        <div class="metric-label">Win Rate</div>
-        <div class="metric-value" style="color: {getProfitColor(winRate - 50)}">
-          {winRate.toFixed(1)}%
-        </div>
-        <div class="metric-sub">
-          {data.metrics.winningTrades}W / {data.metrics.losingTrades}L
-        </div>
-      </div>
-
-      <div class="metric-card">
-        <div class="metric-label">Promedio Ganancia</div>
-        <div class="metric-value positive">
-          {formatCurrency(data.metrics.avgWin)}
-        </div>
-      </div>
-
-      <div class="metric-card">
-        <div class="metric-label">Promedio Pérdida</div>
-        <div class="metric-value negative">
-          {formatCurrency(Math.abs(data.metrics.avgLoss))}
-        </div>
-      </div>
-
-      <div class="metric-card highlight">
-        <div class="metric-label">vs HODL</div>
-        <div class="metric-value" style="color: {getProfitColor(vsHodl)}">
-          {vsHodl >= 0 ? '+' : ''}{vsHodl.toFixed(2)}%
-        </div>
-        <div class="metric-sub">
-          HODL: {hodlProfitPercentage >= 0 ? '+' : ''}{hodlProfitPercentage.toFixed(2)}%
-        </div>
-      </div>
-    </section>
-
-    <!-- Trades Table -->
-    <section class="trades-section">
-      <h2>Historial de Operaciones ({data.trades.length})</h2>
-
-      {#if data.trades.length > 0}
-        <div class="trades-table-container">
-          <table class="trades-table">
-            <thead>
-              <tr>
-                <th>Fecha/Hora</th>
-                <th>Tipo</th>
-                <th>Precio BTC</th>
-                <th>Cantidad BTC</th>
-                <th>USD</th>
-                <th>Balance Resultante</th>
-                <th>Score</th>
-                <th>P&L</th>
-              </tr>
-            </thead>
-            <tbody>
-              {#each data.trades as trade}
-                <tr class={trade.tradeType}>
-                  <td>{formatDate(trade.createdAt)}</td>
-                  <td>
-                    <span class="trade-badge {trade.tradeType}">
-                      {trade.tradeType === 'buy' ? '📈 COMPRA' : '📉 VENTA'}
-                    </span>
-                  </td>
-                  <td>{formatCurrency(trade.btcPrice)}</td>
-                  <td>{trade.btcAmount.toFixed(8)}</td>
-                  <td>{formatCurrency(trade.usdAmount)}</td>
-                  <td>
-                    {formatCurrency(trade.balanceUsd)}
-                    {#if trade.balanceBtc > 0}
-                      <br /><small>+ {trade.balanceBtc.toFixed(8)} ₿</small>
-                    {/if}
-                  </td>
-                  <td>
-                    <span class="score-badge">{trade.scoreAtTrade}/100</span>
-                  </td>
-                  <td>
-                    {#if trade.profitLossUsd !== null}
-                      <span style="color: {getProfitColor(trade.profitLossUsd)}">
-                        {trade.profitLossUsd >= 0 ? '+' : ''}{formatCurrency(trade.profitLossUsd)}
-                        <br />
-                        <small>
-                          ({trade.profitLossPercentage >= 0 ? '+' : ''}{trade.profitLossPercentage.toFixed(2)}%)
-                        </small>
-                      </span>
-                    {:else}
-                      <span class="muted">-</span>
-                    {/if}
-                  </td>
-                </tr>
-              {/each}
-            </tbody>
-          </table>
-        </div>
-      {:else}
-        <p class="no-trades">No hay operaciones todavía. El paper trading ejecutará operaciones automáticamente según las señales del mercado.</p>
-      {/if}
-    </section>
-  {:else}
-    <div class="no-config">
-      <h2>Paper Trading No Configurado</h2>
-      <p>Ejecuta la migración de paper trading para comenzar:</p>
-      <code>cd worker && node src/migrate-paper-trading.js</code>
+      {/each}
     </div>
-  {/if}
+  </section>
 </div>
 
 <style>
@@ -450,8 +268,13 @@
   }
 
   header {
-    text-align: center;
     margin-bottom: 30px;
+  }
+
+  .header-content {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
   }
 
   h1 {
@@ -466,87 +289,35 @@
     margin: 0;
   }
 
-  /* Strategy Section */
-  .strategy-section {
-    margin-bottom: 24px;
+  .header-actions {
+    display: flex;
+    gap: 12px;
   }
 
-  .strategy-card {
-    background: linear-gradient(135deg, #1e3a5f 0%, #2d5a87 100%);
-    border-radius: 12px;
-    padding: 24px;
-    color: white;
-  }
-
-  .strategy-card h2 {
-    color: white;
-    margin: 0 0 12px 0;
-    font-size: 22px;
-  }
-
-  .strategy-description {
-    opacity: 0.9;
-    margin: 0 0 20px 0;
-    font-size: 15px;
-    line-height: 1.5;
-  }
-
-  .strategy-grid {
-    display: grid;
-    grid-template-columns: repeat(2, 1fr);
-    gap: 16px;
-  }
-
-  .strategy-block {
-    background: rgba(255, 255, 255, 0.1);
+  .btn-primary,
+  .btn-secondary {
+    padding: 12px 24px;
+    border: none;
     border-radius: 8px;
-    padding: 16px;
+    font-weight: 600;
+    cursor: pointer;
+    font-size: 14px;
+    transition: opacity 0.2s;
   }
 
-  .strategy-block h3 {
-    font-size: 14px;
-    margin: 0 0 12px 0;
+  .btn-primary {
+    background: #3b82f6;
     color: white;
   }
 
-  .strategy-block ul {
-    margin: 0;
-    padding-left: 20px;
-    font-size: 13px;
-    line-height: 1.8;
+  .btn-secondary {
+    background: #f59e0b;
+    color: white;
   }
 
-  .strategy-block li {
-    opacity: 0.95;
-  }
-
-  .strategy-block p {
-    font-size: 13px;
-    margin: 8px 0 0 0;
+  .btn-primary:hover,
+  .btn-secondary:hover {
     opacity: 0.9;
-  }
-
-  .strategy-note {
-    font-size: 12px;
-    opacity: 0.7;
-    font-style: italic;
-    margin-top: 8px;
-  }
-
-  .strategy-block.entry {
-    border-left: 3px solid #22c55e;
-  }
-
-  .strategy-block.exit {
-    border-left: 3px solid #ef4444;
-  }
-
-  .strategy-block.risk {
-    border-left: 3px solid #f59e0b;
-  }
-
-  .strategy-block.timeframe {
-    border-left: 3px solid #3b82f6;
   }
 
   .error-banner {
@@ -558,349 +329,115 @@
     text-align: center;
   }
 
-  /* Control Panel */
-  .control-panel {
-    display: grid;
-    grid-template-columns: 1fr 2fr;
-    gap: 20px;
-    margin-bottom: 20px;
-  }
-
-  .status-card,
-  .config-card {
+  /* Top Accounts */
+  .top-accounts {
     background: white;
     border-radius: 8px;
     padding: 24px;
     box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+    margin-bottom: 24px;
   }
 
-  .status-header,
-  .config-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    margin-bottom: 16px;
-  }
-
-  h2 {
-    font-size: 18px;
-    margin: 0;
+  .top-accounts h2 {
+    font-size: 20px;
+    margin: 0 0 20px 0;
     color: #1f2937;
   }
 
-  .toggle-btn {
-    padding: 12px 24px;
-    border: none;
-    border-radius: 8px;
-    color: white;
-    font-weight: 600;
-    cursor: pointer;
-    font-size: 14px;
-    transition: opacity 0.2s;
-  }
-
-  .toggle-btn:hover {
-    opacity: 0.9;
-  }
-
-  .started-date {
-    color: #6b7280;
-    font-size: 14px;
-    margin: 8px 0 0 0;
-  }
-
-  .config-display {
-    display: flex;
-    flex-direction: column;
-    gap: 12px;
-    margin-bottom: 16px;
-  }
-
-  .config-item {
-    display: flex;
-    justify-content: space-between;
-    padding: 8px 0;
-    border-bottom: 1px solid #e5e7eb;
-  }
-
-  .config-item .label {
-    color: #6b7280;
-    font-size: 14px;
-  }
-
-  .config-item .value {
-    color: #1f2937;
-    font-weight: 600;
-  }
-
-  .edit-btn,
-  .reset-btn {
-    padding: 8px 16px;
-    border: 1px solid #d1d5db;
-    border-radius: 6px;
-    background: white;
-    color: #374151;
-    cursor: pointer;
-    font-size: 14px;
-  }
-
-  .edit-btn:hover,
-  .reset-btn:hover {
-    background: #f3f4f6;
-  }
-
-  .reset-btn {
-    width: 100%;
-    margin-top: 16px;
-    color: #dc2626;
-    border-color: #fecaca;
-  }
-
-  .reset-btn:hover {
-    background: #fef2f2;
-  }
-
-  /* Form */
-  .config-form {
-    display: flex;
-    flex-direction: column;
-    gap: 16px;
-  }
-
-  .form-row {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 16px;
-  }
-
-  .form-group {
-    display: flex;
-    flex-direction: column;
-  }
-
-  .form-group label {
-    font-size: 12px;
-    color: #6b7280;
-    margin-bottom: 4px;
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-  }
-
-  .form-group input {
-    padding: 8px 12px;
-    border: 1px solid #d1d5db;
-    border-radius: 6px;
-    font-size: 14px;
-  }
-
-  .form-actions {
-    display: flex;
-    gap: 12px;
-  }
-
-  .save-btn,
-  .cancel-btn {
-    flex: 1;
-    padding: 10px;
-    border: none;
-    border-radius: 6px;
-    cursor: pointer;
-    font-size: 14px;
-    font-weight: 600;
-  }
-
-  .save-btn {
-    background: #3b82f6;
-    color: white;
-  }
-
-  .cancel-btn {
-    background: #f3f4f6;
-    color: #6b7280;
-  }
-
-  .form-hint {
-    font-size: 11px;
-    color: #9ca3af;
-    margin-top: 4px;
-  }
-
-  .config-note {
-    background: #fef3c7;
-    color: #92400e;
-    padding: 12px;
-    border-radius: 6px;
-    font-size: 13px;
-    margin-top: 16px;
-  }
-
-  .config-defaults {
-    background: #f0f9ff;
-    border: 1px solid #bae6fd;
-    border-radius: 6px;
-    padding: 12px 16px;
-    margin-top: 16px;
-  }
-
-  .config-defaults h4 {
-    font-size: 13px;
-    margin: 0 0 8px 0;
-    color: #0369a1;
-  }
-
-  .config-defaults ul {
-    margin: 0;
-    padding-left: 20px;
-    font-size: 12px;
-    color: #0c4a6e;
-  }
-
-  .config-defaults li {
-    margin-bottom: 4px;
-  }
-
-  .config-item.has-tooltip {
-    position: relative;
-  }
-
-  .config-item .tooltip {
-    display: none;
-    position: absolute;
-    bottom: 100%;
-    left: 0;
-    background: #1f2937;
-    color: white;
-    padding: 8px 12px;
-    border-radius: 6px;
-    font-size: 12px;
-    white-space: nowrap;
-    z-index: 10;
-    margin-bottom: 4px;
-  }
-
-  .config-item.has-tooltip:hover .tooltip {
-    display: block;
-  }
-
-  .atr-badge {
-    background: #dbeafe;
-    color: #1d4ed8;
-    padding: 2px 8px;
-    border-radius: 4px;
-    font-size: 12px;
-  }
-
-  /* Balance Section */
-  .balance-section {
+  .top-accounts-grid {
     display: grid;
     grid-template-columns: repeat(3, 1fr);
     gap: 20px;
-    margin-bottom: 20px;
   }
 
-  .balance-card {
-    background: white;
-    border-radius: 8px;
+  .top-account-card {
+    background: linear-gradient(135deg, #f3f4f6 0%, #e5e7eb 100%);
+    border-radius: 12px;
     padding: 24px;
-    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+    cursor: pointer;
+    transition: transform 0.2s, box-shadow 0.2s;
+    position: relative;
   }
 
-  .balance-card.total {
-    background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%);
-    color: white;
+  .top-account-card:hover {
+    transform: translateY(-4px);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
   }
 
-  .balance-card h3 {
-    font-size: 14px;
-    margin: 0 0 12px 0;
-    opacity: 0.8;
+  .top-account-card.rank-1 {
+    background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%);
+    border: 2px solid #f59e0b;
   }
 
-  .balance-card.total h3 {
-    color: white;
+  .top-account-card.rank-2 {
+    background: linear-gradient(135deg, #e0e7ff 0%, #c7d2fe 100%);
+    border: 2px solid #6366f1;
   }
 
-  .balance-value {
+  .top-account-card.rank-3 {
+    background: linear-gradient(135deg, #fed7aa 0%, #fdba74 100%);
+    border: 2px solid #f97316;
+  }
+
+  .rank-badge {
     font-size: 32px;
-    font-weight: bold;
-    margin-bottom: 4px;
+    margin-bottom: 12px;
   }
 
-  .balance-sub {
-    font-size: 14px;
-    opacity: 0.8;
-  }
-
-  /* Metrics Section */
-  .metrics-section {
-    display: grid;
-    grid-template-columns: repeat(5, 1fr);
-    gap: 16px;
-    margin-bottom: 20px;
-  }
-
-  .metric-card {
-    background: white;
-    border-radius: 8px;
-    padding: 20px;
-    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
-    text-align: center;
-  }
-
-  .metric-card.highlight {
-    border: 2px solid #3b82f6;
-  }
-
-  .metric-label {
-    font-size: 12px;
-    color: #6b7280;
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-    margin-bottom: 8px;
-  }
-
-  .metric-value {
-    font-size: 24px;
-    font-weight: bold;
+  .top-account-card h3 {
+    font-size: 18px;
+    margin: 0 0 4px 0;
     color: #1f2937;
   }
 
-  .metric-value.positive {
-    color: #22c55e;
+  .top-account-card .strategy {
+    font-size: 13px;
+    color: #6b7280;
+    margin: 0 0 12px 0;
   }
 
-  .metric-value.negative {
-    color: #ef4444;
+  .roi-value {
+    font-size: 24px;
+    font-weight: bold;
+    margin-bottom: 12px;
   }
 
-  .metric-sub {
+  .account-stats {
+    display: flex;
+    justify-content: space-between;
     font-size: 12px;
-    color: #9ca3af;
-    margin-top: 4px;
+    color: #6b7280;
   }
 
-  /* Trades Table */
-  .trades-section {
+  /* Accounts Section */
+  .accounts-section {
     background: white;
     border-radius: 8px;
     padding: 24px;
     box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+    margin-bottom: 24px;
   }
 
-  .trades-section h2 {
-    margin-bottom: 16px;
+  .section-header {
+    margin-bottom: 20px;
   }
 
-  .trades-table-container {
+  .section-header h2 {
+    font-size: 20px;
+    margin: 0;
+    color: #1f2937;
+  }
+
+  .accounts-table-container {
     overflow-x: auto;
   }
 
-  .trades-table {
+  .accounts-table {
     width: 100%;
     border-collapse: collapse;
   }
 
-  .trades-table th {
+  .accounts-table th {
     background: #f9fafb;
     padding: 12px;
     text-align: left;
@@ -911,103 +448,162 @@
     border-bottom: 2px solid #e5e7eb;
   }
 
-  .trades-table td {
+  .accounts-table td {
     padding: 12px;
     border-bottom: 1px solid #e5e7eb;
     font-size: 14px;
   }
 
-  .trades-table tr.buy {
-    background: #f0fdf4;
+  .accounts-table tr:hover {
+    background: #f9fafb;
   }
 
-  .trades-table tr.sell {
+  .accounts-table tr.inactive {
+    opacity: 0.6;
+  }
+
+  .account-name {
+    cursor: pointer;
+    color: #3b82f6;
+  }
+
+  .account-name:hover {
+    text-decoration: underline;
+  }
+
+  .strategy-badge {
+    display: inline-block;
+    padding: 4px 12px;
+    background: #dbeafe;
+    color: #1e40af;
+    border-radius: 12px;
+    font-size: 12px;
+    font-weight: 600;
+  }
+
+  .status-toggle {
+    padding: 4px 12px;
+    border: none;
+    border-radius: 12px;
+    color: white;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: opacity 0.2s;
+  }
+
+  .status-toggle:hover {
+    opacity: 0.8;
+  }
+
+  .actions {
+    display: flex;
+    gap: 8px;
+  }
+
+  .btn-view,
+  .btn-delete {
+    padding: 6px 12px;
+    border: 1px solid #d1d5db;
+    border-radius: 6px;
+    background: white;
+    font-size: 12px;
+    cursor: pointer;
+    transition: background 0.2s;
+  }
+
+  .btn-view {
+    color: #3b82f6;
+    border-color: #3b82f6;
+  }
+
+  .btn-view:hover {
     background: #eff6ff;
   }
 
-  .trade-badge {
-    display: inline-block;
-    padding: 4px 8px;
-    border-radius: 4px;
-    font-size: 12px;
-    font-weight: 600;
+  .btn-delete {
+    color: #dc2626;
+    border-color: #fecaca;
   }
 
-  .trade-badge.buy {
-    background: #22c55e;
-    color: white;
+  .btn-delete:hover {
+    background: #fef2f2;
   }
 
-  .trade-badge.sell {
-    background: #3b82f6;
-    color: white;
-  }
-
-  .score-badge {
-    display: inline-block;
-    padding: 4px 8px;
-    background: #f3f4f6;
-    border-radius: 4px;
-    font-size: 12px;
-    font-weight: 600;
-  }
-
-  .muted {
-    color: #9ca3af;
-  }
-
-  .no-trades {
+  .no-accounts {
     text-align: center;
-    color: #9ca3af;
-    padding: 40px;
+    padding: 60px;
   }
 
-  .no-config {
+  .no-accounts h3 {
+    font-size: 20px;
+    margin: 0 0 8px 0;
+    color: #1f2937;
+  }
+
+  .no-accounts p {
+    color: #6b7280;
+    margin: 0 0 20px 0;
+  }
+
+  /* Strategy Info */
+  .info-section {
     background: white;
     border-radius: 8px;
-    padding: 60px;
-    text-align: center;
+    padding: 24px;
     box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
   }
 
-  .no-config code {
-    background: #f3f4f6;
-    padding: 8px 16px;
-    border-radius: 4px;
-    display: inline-block;
-    margin-top: 16px;
+  .info-section h2 {
+    font-size: 20px;
+    margin: 0 0 20px 0;
+    color: #1f2937;
+  }
+
+  .strategies-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 16px;
+  }
+
+  .strategy-info-card {
+    background: #f9fafb;
+    border-radius: 8px;
+    padding: 16px;
+    border: 1px solid #e5e7eb;
+  }
+
+  .strategy-info-card h3 {
+    font-size: 14px;
+    margin: 0 0 8px 0;
+    color: #1f2937;
+  }
+
+  .suggested-balance {
+    font-size: 13px;
+    color: #6b7280;
+    margin: 0;
   }
 
   @media (max-width: 1024px) {
-    .control-panel {
+    .top-accounts-grid {
       grid-template-columns: 1fr;
     }
 
-    .balance-section {
-      grid-template-columns: 1fr;
-    }
-
-    .metrics-section {
+    .strategies-grid {
       grid-template-columns: repeat(2, 1fr);
     }
 
-    .strategy-grid {
-      grid-template-columns: 1fr;
+    .header-content {
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 16px;
     }
   }
 
   @media (max-width: 640px) {
-    .strategy-card {
-      padding: 16px;
-    }
-
-    .strategy-card h2 {
-      font-size: 18px;
-    }
-
-    .config-item .tooltip {
-      white-space: normal;
-      width: 200px;
+    .strategies-grid {
+      grid-template-columns: 1fr;
     }
   }
 </style>
