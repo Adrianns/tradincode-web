@@ -3,12 +3,22 @@ import { redirect } from '@sveltejs/kit';
 
 export async function load() {
   try {
-    const strategies = await api.getStrategies();
-    return { strategies };
+    const [strategies, timeframes] = await Promise.all([
+      api.getStrategies(),
+      api.getTimeframes()
+    ]);
+    return { strategies, timeframes };
   } catch (error) {
-    console.error('Error loading strategies:', error);
+    console.error('Error loading form data:', error);
     return {
       strategies: [],
+      timeframes: [
+        { value: '15m', label: '15 Minutes', description: 'Very short-term (high frequency)' },
+        { value: '1h', label: '1 Hour', description: 'Short-term intraday' },
+        { value: '4h', label: '4 Hours', description: 'Medium-term intraday' },
+        { value: '1d', label: '1 Day', description: 'Daily (default)' },
+        { value: '1w', label: '1 Week', description: 'Weekly (swing trading)' }
+      ],
       error: error.message
     };
   }
@@ -21,6 +31,7 @@ export const actions = {
     const accountData = {
       account_name: data.get('account_name'),
       strategy: data.get('strategy'),
+      timeframe: data.get('timeframe') || '1d',
       initial_balance: parseFloat(data.get('initial_balance')),
       is_active: data.get('is_active') === 'on',
       position_size_percent: parseFloat(data.get('position_size_percent')) / 100,

@@ -81,6 +81,7 @@ export const api = {
 
   // Strategies
   getStrategies: () => fetchAPI('/strategies'),
+  getTimeframes: () => fetchAPI('/strategies/timeframes'),
 
   // Health check
   health: () => fetchAPI('/health', {

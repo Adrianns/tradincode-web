@@ -6,7 +6,9 @@
   export let form;
 
   let strategies = data.strategies || [];
+  let timeframes = data.timeframes || [];
   let selectedStrategy = '';
+  let selectedTimeframe = '1d';
   let suggestedBalance = 1000;
 
   // Update suggested balance when strategy changes
@@ -82,6 +84,27 @@
               Suggested balance: <strong>{formatCurrency(suggestedBalance)}</strong>
             {:else}
               Select a strategy to see suggested balance
+            {/if}
+          </span>
+        </div>
+
+        <div class="form-group">
+          <label for="timeframe">Timeframe *</label>
+          <select
+            id="timeframe"
+            name="timeframe"
+            required
+            bind:value={selectedTimeframe}
+          >
+            {#each timeframes as tf}
+              <option value={tf.value}>{tf.label}</option>
+            {/each}
+          </select>
+          <span class="form-hint">
+            {#if selectedTimeframe}
+              {timeframes.find(t => t.value === selectedTimeframe)?.description || 'Chart interval for this strategy'}
+            {:else}
+              Select chart interval
             {/if}
           </span>
         </div>
